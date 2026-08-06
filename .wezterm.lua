@@ -15,20 +15,24 @@ wezterm.on('format-tab-title', function(tab)
   }
 end)
 
-if wezterm.target_triple == 'x86_64-pc-windows-msvc' then
-  config.default_domain = 'WSL:Ubuntu'
+if wezterm.target_triple:find('windows') then
+  config.default_domain = 'WSL:default~'
 end
 
 wezterm.on('gui-startup', function(cmd)
-  local tab, pane, window = wezterm.mux.spawn_window(cmd or {})
+  local _, _, window = wezterm.mux.spawn_window(cmd or {})
   window:gui_window():maximize()
 end)
 
 config.keys = {
-  { key = 'R', mods = 'CTRL|SHIFT', action = wezterm.action_callback(function(win, pane)
-    win:toast_notification('wezterm', 'Config reloaded')
-    wezterm.reload_configuration()
-  end) },
+  {
+    key = 'R',
+    mods = 'CTRL|SHIFT',
+    action = wezterm.action_callback(function(win, _)
+      win:toast_notification('wezterm', 'Config reloaded')
+      wezterm.reload_configuration()
+    end)
+  },
   { key = 'W', mods = 'CTRL|SHIFT', action = wezterm.action.CloseCurrentTab { confirm = true } },
   { key = 'Q', mods = 'CTRL|SHIFT', action = wezterm.action.QuitApplication },
 }
