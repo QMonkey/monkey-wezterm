@@ -25,6 +25,29 @@ if wezterm.target_triple:find('windows') then
   })
 end
 
+local function split_chooser(direction)
+  local choices = {}
+  for i, item in ipairs(config.launch_menu or {}) do
+    choices[i] = { id = tostring(i), label = item.label }
+  end
+  return wezterm.action.InputSelector {
+    title = 'Split ' .. (direction == 'Right' and 'Vertically' or 'Horizontally'),
+    choices = choices,
+    action = wezterm.action_callback(function(win, pane, id)
+      local item = config.launch_menu[tonumber(id)]
+      if item then
+        win:perform_action(
+          wezterm.action.SplitPane {
+            direction = direction,
+            command = { args = item.args, domain = item.domain },
+          },
+          pane
+        )
+      end
+    end),
+  }
+end
+
 wezterm.on('gui-startup', function(cmd)
   local _, _, window = wezterm.mux.spawn_window(cmd or {})
   window:gui_window():maximize()
@@ -52,13 +75,20 @@ config.keys = {
       wezterm.reload_configuration()
     end)
   },
-  { key = 'W', mods = 'CTRL|SHIFT', action = wezterm.action.CloseCurrentTab { confirm = true } },
+  {
+    key = 'W',
+    mods = 'CTRL|SHIFT',
+    action = wezterm.action.CloseCurrentPane { confirm = true },
+  },
   { key = 'Q', mods = 'CTRL|SHIFT', action = wezterm.action.QuitApplication },
   {
     key = 'T',
     mods = 'CTRL|SHIFT',
     action = wezterm.action.ShowLauncherArgs { flags = 'FUZZY|LAUNCH_MENU_ITEMS' },
   },
+  { key = 'V', mods = 'CTRL|SHIFT|ALT', action = split_chooser('Right') },
+  { key = 'H', mods = 'CTRL|SHIFT|ALT', action = split_chooser('Down') },
 }
 
 return config
+
