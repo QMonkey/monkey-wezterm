@@ -3,12 +3,14 @@ local wezterm = require 'wezterm'
 local config = {
   color_scheme = 'Monokai',
   window_background_opacity = 0.9,
-  macOS_window_background_blur = 0,
+  macos_window_background_blur = 0,
   text_background_opacity = 0.9,
   window_decorations = 'NONE',
 }
 
-if wezterm.target_triple:find('windows') then
+local is_windows = wezterm.target_triple:find('windows') ~= nil
+
+if is_windows then
   config.default_prog = { 'wsl.exe', '--cd', '~' }
   config.launch_menu = {}
   for _, dom in ipairs(wezterm.default_wsl_domains()) do
@@ -25,29 +27,6 @@ if wezterm.target_triple:find('windows') then
   })
 end
 
-local function split_chooser(direction)
-  local choices = {}
-  for i, item in ipairs(config.launch_menu or {}) do
-    choices[i] = { id = tostring(i), label = item.label }
-  end
-  return wezterm.action.InputSelector {
-    title = 'Split ' .. (direction == 'Right' and 'Vertically' or 'Horizontally'),
-    choices = choices,
-    action = wezterm.action_callback(function(win, pane, id)
-      local item = config.launch_menu[tonumber(id)]
-      if item then
-        win:perform_action(
-          wezterm.action.SplitPane {
-            direction = direction,
-            command = { args = item.args, domain = item.domain },
-          },
-          pane
-        )
-      end
-    end),
-  }
-end
-
 wezterm.on('gui-startup', function(cmd)
   local _, _, window = wezterm.mux.spawn_window(cmd or {})
   window:gui_window():maximize()
@@ -62,7 +41,11 @@ wezterm.on('format-tab-title', function(tab)
 end)
 
 wezterm.on('new-tab-button-click', function(window, pane)
-  window:perform_action(wezterm.action.ShowLauncherArgs { flags = 'FUZZY|LAUNCH_MENU_ITEMS' }, pane)
+  if is_windows then
+    window:perform_action(wezterm.action.ShowLauncherArgs { flags = 'FUZZY|LAUNCH_MENU_ITEMS' }, pane)
+  else
+    window:perform_action(wezterm.action.SpawnTab, pane)
+  end
   return false
 end)
 
@@ -73,22 +56,26 @@ config.keys = {
     action = wezterm.action_callback(function(win, _)
       win:toast_notification('wezterm', 'Config reloaded')
       wezterm.reload_configuration()
-    end)
+    end),
   },
-  {
-    key = 'W',
-    mods = 'CTRL|SHIFT',
-    action = wezterm.action.CloseCurrentPane { confirm = true },
-  },
+  { key = 'W', mods = 'CTRL|SHIFT', action = wezterm.action.CloseCurrentPane { confirm = true }, },
   { key = 'Q', mods = 'CTRL|SHIFT', action = wezterm.action.QuitApplication },
   {
     key = 'T',
     mods = 'CTRL|SHIFT',
-    action = wezterm.action.ShowLauncherArgs { flags = 'FUZZY|LAUNCH_MENU_ITEMS' },
+    action = is_windows
+        and wezterm.action.ShowLauncherArgs { flags = 'FUZZY|LAUNCH_MENU_ITEMS' }
+        or wezterm.action.SpawnTab,
   },
-  { key = 'V', mods = 'CTRL|SHIFT|ALT', action = split_chooser('Right') },
-  { key = 'H', mods = 'CTRL|SHIFT|ALT', action = split_chooser('Down') },
+  { key = '1', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(0) },
+  { key = '2', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(1) },
+  { key = '3', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(2) },
+  { key = '4', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(3) },
+  { key = '5', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(4) },
+  { key = '6', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(5) },
+  { key = '7', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(6) },
+  { key = '8', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(7) },
+  { key = '9', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(8) },
 }
 
 return config
-
