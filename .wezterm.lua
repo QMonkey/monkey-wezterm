@@ -78,6 +78,11 @@ config.keys = {
     end),
   },
   {
+    key = 'O',
+    mods = 'CTRL|SHIFT',
+    action = wezterm.action.QuickSelect,
+  },
+  {
     key = 'T',
     mods = 'CTRL|SHIFT',
     action = is_windows
