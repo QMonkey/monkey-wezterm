@@ -1,12 +1,13 @@
 local wezterm = require 'wezterm'
+local tabline = wezterm.plugin.require 'https://github.com/michaelbrusegard/tabline.wez'
 
-local config = {
-  color_scheme = 'Monokai',
-  window_background_opacity = 0.9,
-  macos_window_background_blur = 0,
-  text_background_opacity = 0.9,
-  window_decorations = 'NONE',
-}
+local config = wezterm.config_builder()
+
+config.color_scheme = 'Monokai'
+config.window_background_opacity = 0.9
+config.macos_window_background_blur = 0
+config.text_background_opacity = 0.9
+config.window_decorations = 'NONE'
 
 local is_windows = wezterm.target_triple:find('windows') ~= nil
 
@@ -27,26 +28,32 @@ if is_windows then
   })
 end
 
+tabline.setup {
+  options = {
+    theme = config.colors,
+    icons_enabled = false,
+    tabs_enabled = true,
+    section_separators = '',
+    component_separators = '',
+    tab_separators = '',
+  },
+  sections = {
+    tabline_a = { 'mode' },
+    tabline_b = { 'workspace' },
+    tabline_c = { ' ' },
+    tab_active = { 'index', { 'parent', padding = 0 }, '/', 'cwd' },
+    tab_inactive = { 'index', { 'process', padding = { left = 0, right = 1 } } },
+    tabline_x = {},
+    tabline_y = {},
+    tabline_z = { 'domain' },
+  },
+  extensions = {},
+}
+tabline.apply_to_config(config)
+
 wezterm.on('gui-startup', function(cmd)
   local _, _, window = wezterm.mux.spawn_window(cmd or {})
   window:gui_window():maximize()
-end)
-
-wezterm.on('format-tab-title', function(tab)
-  local pane = tab.active_pane
-  local title = pane.title
-  return wezterm.format {
-    { Text = title },
-  }
-end)
-
-wezterm.on('new-tab-button-click', function(window, pane)
-  if is_windows then
-    window:perform_action(wezterm.action.ShowLauncherArgs { flags = 'FUZZY|LAUNCH_MENU_ITEMS' }, pane)
-  else
-    window:perform_action(wezterm.action.SpawnTab, pane)
-  end
-  return false
 end)
 
 config.keys = {
@@ -60,6 +67,16 @@ config.keys = {
   },
   { key = 'W', mods = 'CTRL|SHIFT', action = wezterm.action.CloseCurrentPane { confirm = true }, },
   { key = 'Q', mods = 'CTRL|SHIFT', action = wezterm.action.QuitApplication },
+  {
+    key = 'U',
+    mods = 'CTRL|SHIFT',
+    action = wezterm.action_callback(function(win, _)
+      win:toast_notification('wezterm', 'Updating plugins...')
+      wezterm.plugin.update_all()
+      win:toast_notification('wezterm', 'Plugins updated, reloading config')
+      wezterm.reload_configuration()
+    end),
+  },
   {
     key = 'T',
     mods = 'CTRL|SHIFT',
