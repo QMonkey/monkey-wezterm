@@ -3,11 +3,10 @@ local tabline = wezterm.plugin.require 'https://github.com/michaelbrusegard/tabl
 
 local config = wezterm.config_builder()
 
-config.color_scheme = 'Monokai'
+config.color_scheme = 'Sonokai (Gogh)'
 config.window_background_opacity = 0.9
 config.macos_window_background_blur = 0
 config.text_background_opacity = 0.9
-config.window_decorations = 'NONE'
 
 local is_windows = wezterm.target_triple:find('windows') ~= nil
 
@@ -87,7 +86,7 @@ config.keys = {
     mods = 'CTRL|SHIFT',
     action = is_windows
         and wezterm.action.ShowLauncherArgs { flags = 'FUZZY|LAUNCH_MENU_ITEMS' }
-        or wezterm.action.SpawnTab,
+        or wezterm.action.SpawnTab('CurrentPaneDomain'),
   },
   { key = '1', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(0) },
   { key = '2', mods = 'CTRL|SHIFT', action = wezterm.action.ActivateTab(1) },
