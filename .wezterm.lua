@@ -40,7 +40,7 @@ tabline.setup {
     tabline_a = { 'mode' },
     tabline_b = { 'workspace' },
     tabline_c = { ' ' },
-    tab_active = { 'index', { 'parent', padding = 0 }, '/', 'cwd' },
+    tab_active = { 'index', { 'parent', padding = 0, fmt = function(str) return str .. '/' end }, { 'cwd', padding = { left = 0, right = 1 } } },
     tab_inactive = { 'index', { 'process', padding = { left = 0, right = 1 } } },
     tabline_x = {},
     tabline_y = {},
