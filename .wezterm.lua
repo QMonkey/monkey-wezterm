@@ -7,6 +7,7 @@ config.color_scheme = 'Sonokai (Gogh)'
 config.window_background_opacity = 0.9
 config.macos_window_background_blur = 0
 config.text_background_opacity = 0.9
+config.enable_kitty_keyboard = true
 
 local is_windows = wezterm.target_triple:find('windows') ~= nil
 
