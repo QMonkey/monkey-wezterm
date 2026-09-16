@@ -231,7 +231,8 @@ ensure_rustup() {
 	# Official rustup installer (BUILD.md: Rust 1.71+ required).
 	info "Installing rustup (non-interactive)..."
 	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-	# rustup installs into ~/.cargo — put cargo on PATH for this run.
+	# rustup installs into ~/.cargo — put cargo on PATH for this run (the
+	# cargo build below runs in this same script).
 	[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 	have_native_cmd cargo || fail "rustup installation failed — install it manually: https://rust-lang.org/tools/install/"
 	ok "rustup installed."
@@ -260,9 +261,16 @@ install_build_deps() {
 		hash -r
 	fi
 	have_native_cmd git || fail "git installation failed — install it manually."
+	ensure_rustup
+	# apt lists on fresh/WSL images are often stale or lack the universe
+	# index that some of wezterm's ./get-deps packages live in — get-deps
+	# does not run apt-get update itself.
+	if have_native_cmd apt-get; then
+		sudo_cmd apt-get update -q || true
+	fi
 	ensure_wezterm_source
 	info "Installing wezterm system dependencies via ./get-deps..."
-	( cd "$WEZTERM_SRC_DIR" && ./get-deps ) || warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
+	(cd "$WEZTERM_SRC_DIR" && ./get-deps) || warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
 }
 
 # ────────────────── Step 2: Build wezterm from source ──────────────────
