@@ -1,0 +1,392 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ──────────────────────────────────────────────────────────────
+# monkey-wezterm one-shot installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/QMonkey/monkey-wezterm/master/install.sh | bash
+# ──────────────────────────────────────────────────────────────
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+INSTALL_DIR="${INSTALL_DIR:-$HOME/Documents/monkey-wezterm}"
+WEZTERM_SRC_DIR="${WEZTERM_SRC_DIR:-$HOME/Documents/wezterm}"
+SUDOERS_D_DIR="${SUDOERS_D_DIR:-/etc/sudoers.d}"
+SUDO_NOPASSWD=0
+NOPASSWD_DROPIN="$SUDOERS_D_DIR/zz-monkey-wezterm-nopasswd"
+
+# Never let a missing HOME fail later under `set -u`.
+[ -n "${HOME:-}" ] || {
+	echo "[FAIL] \$HOME is not set — cannot determine install locations." >&2
+	exit 1
+}
+
+info() { echo -e "${CYAN}[INFO]${NC}  $*"; }
+ok() { echo -e "${GREEN}[  OK]${NC}  $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+fail() {
+	echo -e "${RED}[FAIL]${NC}  $*"
+	exit 1
+}
+
+# ────────────────── OS / WSL detection ──────────────────
+
+os_detect() {
+	case "$(uname -s)" in
+	Linux)
+		if [ -f /etc/os-release ]; then
+			# shellcheck disable=SC1091
+			. /etc/os-release
+			case "${ID:-}" in
+			ubuntu | debian | linuxmint | pop | elementary | zorin) echo "debian" ;;
+			arch | manjaro | endeavouros) echo "arch" ;;
+			opensuse* | suse | sles) echo "opensuse" ;;
+			centos | rhel | fedora | rocky | almalinux | ol) echo "centos" ;;
+			*) echo "linux-unknown" ;;
+			esac
+		else
+			echo "linux-unknown"
+		fi
+		;;
+	Darwin) echo "macos" ;;
+	*) echo "unknown" ;;
+	esac
+}
+
+# WSL interop appends the WINDOWS PATH to ours, so tools installed on the
+# Windows side (node, python, sudo.exe, ...) appear as /mnt/c/... shims.
+# They are not Linux binaries and root's secure_path cannot see them —
+# treat /mnt/* resolutions as "not installed" so the real Linux packages
+# get installed instead.
+have_native_cmd() {
+	command -v "$1" &>/dev/null || return 1
+	case "$(command -v "$1")" in
+	/mnt/*) return 1 ;; # WSL Windows-interop shim
+	esac
+	return 0
+}
+
+# Absolute path to a LINUX sudo, or non-zero.
+native_sudo() {
+	local p
+	have_native_cmd sudo || return 1
+	p=$(command -v sudo)
+	printf '%s' "$p"
+}
+
+OS=$(os_detect)
+
+sudo_cmd() {
+	# Lazy re-auth: Homebrew resets the sudo timestamp on EVERY invocation
+	# (brew.sh runs `sudo --reset-timestamp` at startup), so a ticket that
+	# was valid a minute ago can be dead here. Re-authenticate proactively
+	# with an explanatory prompt instead of letting the command fail or
+	# spring a context-free password prompt. `-n true` never prompts; the
+	# interactive `-v` only runs when the ticket is actually gone.
+	local sudo_bin
+	sudo_bin=$(native_sudo) || {
+		"$@"
+		return
+	}
+	if ! "$sudo_bin" -n true 2>/dev/null; then
+		"$sudo_bin" -v -p "[monkey-wezterm] sudo credentials needed to continue — enter your password: " || return 1
+	fi
+	"$sudo_bin" "$@"
+}
+
+# Print the login-shell profile file for the detected shell
+# (used for the final PATH hint).
+shell_env_files() {
+	local shell="${SHELL:-bash}"
+	shell="${shell##*/}"
+	case "$shell" in
+	zsh)
+		printf '%s\n' "$HOME/.zprofile"
+		;;
+	bash)
+		if [ -f "$HOME/.bash_profile" ]; then
+			printf '%s\n' "$HOME/.bash_profile"
+		else
+			printf '%s\n' "$HOME/.profile"
+		fi
+		;;
+	*)
+		printf '%s\n' "$HOME/.profile"
+		;;
+	esac
+}
+
+# ────────────────── sudo setup (auth + drop-ins + keepalive) ──────────────────
+
+SUDO_KEEPALIVE_PID=""
+
+cleanup_sudo() {
+	# Kill the keepalive (if running) and remove the temporary NOPASSWD
+	# drop-in. `sudo -n rm` works while NOPASSWD is still in place — the
+	# file grants it, so removal never needs a password.
+	if [ -n "$SUDO_KEEPALIVE_PID" ]; then
+		kill "$SUDO_KEEPALIVE_PID" 2>/dev/null
+		wait "$SUDO_KEEPALIVE_PID" 2>/dev/null
+	fi
+	if [ "$SUDO_NOPASSWD" -eq 1 ] && [ -n "$SUDO_BIN" ]; then
+		"$SUDO_BIN" -n rm -f "$NOPASSWD_DROPIN" 2>/dev/null ||
+			warn "could not remove the NOPASSWD drop-in — remove it manually: sudo rm $NOPASSWD_DROPIN"
+	fi
+}
+
+setup_sudo() {
+	# Keep sudo credentials alive for the whole run: the gap between the first
+	# sudo (build deps) and later ones (make install) can exceed the default
+	# 15-min timestamp_timeout on slow downloads/compiles. A re-auth prompt
+	# then aborts unattended runs (no TTY to answer it).
+	# Skip when running as root or when no native sudo is available.
+	SUDO_BIN=$(native_sudo) || return 0
+	if [ "$(id -u)" -eq 0 ]; then
+		return 0
+	fi
+	# Pre-authenticate once so the password is entered at the very start
+	# instead of mid-run after a long download/compile.
+	"$SUDO_BIN" -v || fail "sudo authorization failed — run this script in an interactive terminal."
+	# Temporary NOPASSWD for the duration of the run — the core of the
+	# one-password design. Three things would otherwise kill the sudo
+	# ticket mid-run and force a re-auth prompt:
+	#   1. Homebrew resets the sudo timestamp on EVERY `brew` invocation
+	#      (brew.sh runs `sudo --reset-timestamp` at startup) — even a
+	#      never-expiring ticket dies after each brew command;
+	#   2. WSL2 clock steps (host sleep/resume, TSC skew) make sudo
+	#      disable tickets "from the future";
+	#   3. plain expiry (default 15 minutes) on long downloads/compiles.
+	# With NOPASSWD, authentication is granted by the sudoers rule itself
+	# and the timestamp is never consulted — on both GNU sudo and sudo-rs
+	# — so the run is immune to all three in ANY command order, and the
+	# only password entry is the `sudo -v` above.
+	# Scoped to the invoking user and REMOVED on exit (incl. Ctrl-C);
+	# if the script is SIGKILLed the file survives — remove manually with
+	# `sudo rm $NOPASSWD_DROPIN`. If you prefer a permanent passwordless
+	# sudo, add the same line to your own sudoers drop-in instead.
+	if printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$(id -un)" |
+		"$SUDO_BIN" -n sh -c 'umask 077; cat >"$1" && chmod 0440 "$1" && visudo -c -f "$1" >/dev/null 2>&1 || { rm -f "$1"; exit 1; }' sh "$NOPASSWD_DROPIN" >/dev/null 2>&1; then
+		SUDO_NOPASSWD=1
+		ok "Temporary NOPASSWD drop-in installed for this run (auto-removed on exit)."
+	else
+		warn "could not install the temporary NOPASSWD drop-in — falling back to keepalive + lazy re-auth."
+	fi
+	if [ "$SUDO_NOPASSWD" -eq 0 ]; then
+		# Fallback when NOPASSWD could not be installed: refresh the ticket
+		# in the background so plain expiry does not prompt mid-run. It
+		# cannot fully protect the run — brew resets the ticket by design
+		# and WSL clock steps disable it — so when this stops, sudo_cmd()
+		# re-authenticates lazily (one explanatory prompt) at the next
+		# privileged call.
+		(
+			# 60s refresh against the 15-min default timeout leaves a 15x
+			# margin; override via SUDO_KEEPALIVE_INTERVAL if needed.
+			interval="${SUDO_KEEPALIVE_INTERVAL:-60}"
+			# Kill the in-flight `sleep` child when TERMed, and wait() to
+			# reap — WSL's init does not reap adopted zombies.
+			trap 'kill $(jobs -p) 2>/dev/null; wait 2>/dev/null; exit 0' TERM
+			while true; do
+				sleep "$interval" &
+				wait "$!" 2>/dev/null || exit 0
+				if ! "$SUDO_BIN" -n true 2>/dev/null; then
+					warn "sudo keepalive stopped — expected after a brew run; the next privileged command re-authenticates."
+					exit 0
+				fi
+			done
+		) &
+		SUDO_KEEPALIVE_PID=$!
+	fi
+	# Recycle the background loop and drop the NOPASSWD grant on any exit
+	# path (success, fail, Ctrl-C).
+	trap cleanup_sudo EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+}
+
+# ────────────────── Step 1: Set up the wezterm build environment ──────────────────
+
+install_with_system_mgr() {
+	case "$OS" in
+	debian) sudo_cmd apt-get install -y "$@" ;;
+	arch) sudo_cmd pacman -S --noconfirm "$@" ;;
+	opensuse) sudo_cmd zypper --non-interactive install -y "$@" ;;
+	centos)
+		sudo_cmd dnf install -y epel-release || true
+		sudo_cmd dnf install -y "$@"
+		;;
+	macos) brew install "$@" ;;
+	*) return 1 ;;
+	esac
+}
+
+ensure_rustup() {
+	if have_native_cmd cargo; then
+		ok "rust toolchain already installed."
+		return 0
+	fi
+	# Official rustup installer (BUILD.md: Rust 1.71+ required).
+	info "Installing rustup (non-interactive)..."
+	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+	# rustup installs into ~/.cargo — put cargo on PATH for this run.
+	[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+	have_native_cmd cargo || fail "rustup installation failed — install it manually: https://rust-lang.org/tools/install/"
+	ok "rustup installed."
+}
+
+ensure_wezterm_source() {
+	if [ -d "$WEZTERM_SRC_DIR/.git" ]; then
+		info "wezterm source already exists at $WEZTERM_SRC_DIR — pulling latest..."
+		git -C "$WEZTERM_SRC_DIR" pull --ff-only || warn "git pull failed — building from existing source."
+		git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive || warn "submodule update failed — build may fail with a zlib error."
+	else
+		# BUILD.md: submodules are REQUIRED (missing them fails with a
+		# confusing zlib error), hence --recursive.
+		info "Cloning wezterm source (with submodules)..."
+		git clone --depth=1 --branch=main --recursive https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR"
+	fi
+}
+
+install_build_deps() {
+	# git is needed to clone the sources; every other system dependency is
+	# installed by wezterm's own ./get-deps script, which knows the package
+	# names for all supported distros (and macOS via brew).
+	if ! have_native_cmd git; then
+		info "Installing git..."
+		install_with_system_mgr git
+		hash -r
+	fi
+	have_native_cmd git || fail "git installation failed — install it manually."
+	ensure_wezterm_source
+	info "Installing wezterm system dependencies via ./get-deps..."
+	( cd "$WEZTERM_SRC_DIR" && ./get-deps ) || warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
+}
+
+# ────────────────── Step 2: Build wezterm from source ──────────────────
+
+# wezterm versions are date-based: "wezterm 20240127-113934-3aa51d5a".
+# The config needs 20240127+ (config_builder, plugin API, kitty keyboard).
+wezterm_at_least() {
+	have_native_cmd wezterm || return 1
+	local ver
+	ver=$(wezterm --version 2>/dev/null | grep -oE '[0-9]{8}' | head -1)
+	[[ -z "$ver" ]] && return 1
+	((ver >= 20240127))
+}
+
+build_wezterm() {
+	if wezterm_at_least; then
+		ok "$(wezterm --version 2>/dev/null | head -1) already installed and meets requirement (>= 20240127). Skipping build."
+		return 0
+	fi
+	warn "wezterm 20240127+ not found or below requirement — building from source."
+
+	pushd "$WEZTERM_SRC_DIR" >/dev/null
+	# This is the long pole: a full rust release build runs 10-30 minutes
+	# with NO output from cargo itself — spell out that the wait is normal.
+	info "Compiling wezterm (cargo build --release) — 10-30 minutes, no output below until done..."
+	cargo build --release 2>&1 | tee /tmp/wezterm-build.log || {
+		fail "wezterm build failed. Check /tmp/wezterm-build.log"
+	}
+	popd >/dev/null
+
+	info "Installing wezterm binaries to /usr/local/bin..."
+	local bin
+	for bin in wezterm wezterm-gui wezterm-mux-server; do
+		if [ -x "$WEZTERM_SRC_DIR/target/release/$bin" ]; then
+			sudo_cmd cp "$WEZTERM_SRC_DIR/target/release/$bin" /usr/local/bin/
+			ok "$bin → /usr/local/bin/$bin"
+		fi
+	done
+	hash -r
+
+	if wezterm_at_least; then
+		ok "$(wezterm --version 2>/dev/null | head -1) built and installed successfully."
+	else
+		fail "wezterm build completed but wezterm is not found in PATH."
+	fi
+}
+
+# ────────────────── Step 3: Clone monkey-wezterm ──────────────────
+
+clone_monkey_wezterm() {
+	if [ -d "$INSTALL_DIR/.git" ]; then
+		info "monkey-wezterm already exists at $INSTALL_DIR — pulling latest..."
+		git -C "$INSTALL_DIR" pull --ff-only || warn "git pull failed — keeping existing version."
+	else
+		info "Cloning monkey-wezterm to $INSTALL_DIR..."
+		git clone https://github.com/QMonkey/monkey-wezterm.git "$INSTALL_DIR"
+	fi
+	ok "monkey-wezterm ready at $INSTALL_DIR."
+}
+
+# ────────────────── Step 4: Symlink config ──────────────────
+
+setup_symlinks() {
+	info "Setting up configuration symlinks..."
+	mkdir -p "$HOME/.config/wezterm"
+	ln -sf "$INSTALL_DIR/.wezterm.lua" "$HOME/.config/wezterm/wezterm.lua"
+	ok ".config/wezterm/wezterm.lua → $INSTALL_DIR/.wezterm.lua"
+}
+
+# ────────────────── Step 5: Verify with checkhealth.sh ──────────────────
+
+# Plain run (no --install): everything should pass except the plugins WARN,
+# which resolves on first wezterm start.
+verify_checkhealth() {
+	bash "$INSTALL_DIR/checkhealth.sh" || true
+}
+
+# ────────────────── Main ──────────────────
+
+main() {
+	echo ""
+	echo -e "${BOLD}╔══════════════════════════════════════════╗${NC}"
+	echo -e "${BOLD}║      monkey-wezterm installer            ║${NC}"
+	echo -e "${BOLD}╚══════════════════════════════════════════╝${NC}"
+	echo ""
+
+	info "Detected OS: ${CYAN}${OS}${NC}"
+	info "monkey-wezterm: ${CYAN}${INSTALL_DIR}${NC}"
+	info "wezterm source: ${CYAN}${WEZTERM_SRC_DIR}${NC} (kept for future updates)"
+	echo ""
+
+	setup_sudo
+
+	install_build_deps
+	echo ""
+
+	build_wezterm
+	echo ""
+
+	clone_monkey_wezterm
+	echo ""
+
+	setup_symlinks
+	echo ""
+
+	verify_checkhealth
+	echo ""
+
+	echo -e "${GREEN}${BOLD}monkey-wezterm installation complete!${NC}"
+	echo ""
+	echo -e "  Config:   ${CYAN}$INSTALL_DIR/.wezterm.lua${NC} → ${CYAN}~/.config/wezterm/wezterm.lua${NC}"
+	echo -e "  Plugins:  ${CYAN}~/.local/share/wezterm/plugins/${NC} (tabline.wez, auto-cloned on first start)"
+	echo ""
+	echo -e "  Run ${CYAN}wezterm${NC} to start."
+	echo -e "  Update wezterm: ${CYAN}cd $WEZTERM_SRC_DIR && git pull --ff-only && git submodule update --init --recursive && cargo build --release && sudo cp target/release/{wezterm,wezterm-gui} /usr/local/bin/${NC}"
+	echo -e "  Update monkey-wezterm: ${CYAN}cd $INSTALL_DIR && git pull${NC}"
+	echo ""
+	# The .cargo/bin PATH line was added to shell rc files by rustup, but it
+	# only applies to shells started AFTER this point.
+	local env_file
+	env_file="$(shell_env_files | head -1)"
+	echo -e "  ${YELLOW}New PATH takes effect in NEW shells. To use it in this terminal now:${NC}"
+	echo -e "    ${CYAN}source ${env_file}${NC}    ${YELLOW}# or simply: ${CYAN}exec \$SHELL${NC}"
+	echo ""
+}
+
+main "$@"
