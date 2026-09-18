@@ -80,6 +80,10 @@ native_sudo() {
 
 OS=$(os_detect)
 
+# TIOCSTI injection right: a chaining wrapper may pre-set this to its
+# own name — then THIS script must not inject. Standalone runs self-claim.
+ACQUIRE_TIOCSTI="${ACQUIRE_TIOCSTI:-monkey-wezterm}"
+
 sudo_cmd() {
 	# Lazy re-auth: Homebrew resets the sudo timestamp on EVERY invocation
 	# (brew.sh runs `sudo --reset-timestamp` at startup), so a ticket that
@@ -96,6 +100,51 @@ sudo_cmd() {
 		"$sudo_bin" -v -p "[monkey-wezterm] sudo credentials needed to continue — enter your password: " || return 1
 	fi
 	"$sudo_bin" "$@"
+}
+
+# ────────────────── TIOCSTI injection ──────────────────
+# Type <cmd> + newline into the controlling terminal: the parent shell
+# executes it as if the user had typed it — AFTER this script (and any
+# wrapper chaining it) has fully exited, so injection can never disturb
+# the run itself. Needs python3 or perl; any failure returns non-zero so
+# callers can fall back to a printed hint. Never fatal.
+inject_tty() {
+	local cmd="$1" tiocsti
+	[ -n "$cmd" ] || return 1
+	# No writable controlling terminal (CI, nested pipes) — nothing to
+	# inject into. access(W_OK) on /dev/tty fails with ENXIO when the
+	# process has no controlling tty.
+	[ -w /dev/tty ] || return 1
+	# python3 first: termios.TIOCSTI carries the correct constant per
+	# platform (Linux 0x5412, Darwin 0x80047412).
+	if have_native_cmd python3; then
+		python3 - "$cmd" <<'PYEOF' 2>/dev/null && return 0
+import sys, os, fcntl, termios
+cmd = sys.argv[1] + "\n"
+try:
+    fd = os.open("/dev/tty", os.O_WRONLY)
+    ioctl = termios.TIOCSTI
+except (OSError, AttributeError):
+    sys.exit(1)
+for ch in cmd:
+    try:
+        fcntl.ioctl(fd, ioctl, ord(ch))
+    except OSError:
+        sys.exit(1)
+PYEOF
+	fi
+	# perl fallback: macOS ships /usr/bin/perl, Debian/Ubuntu perl-base is
+	# Essential. TIOCSTI's value differs per platform.
+	tiocsti=0x5412
+	[ "$(uname -s)" = "Darwin" ] && tiocsti=0x80047412
+	perl -e '
+		my ($cmd, $tio) = @ARGV;
+		open(my $tty, ">", "/dev/tty") or exit 1;
+		for my $ch (split //, $cmd . "\n") {
+			ioctl($tty, hex($tio), ord($ch)) or exit 1;
+		}
+	' "$cmd" "$tiocsti" 2>/dev/null && return 0
+	return 1
 }
 
 # Print the login-shell profile file for the detected shell
@@ -442,8 +491,17 @@ main() {
 	# only applies to shells started AFTER this point.
 	local env_file
 	env_file="$(shell_env_files | head -1)"
-	echo -e "  ${YELLOW}New PATH takes effect in NEW shells. To use it in this terminal now:${NC}"
-	echo -e "    ${CYAN}source ${env_file}${NC}    ${YELLOW}# or simply: ${CYAN}exec \$SHELL${NC}"
+	# ACQUIRE_TIOCSTI protocol: only the script that claimed the injection
+	# right acts. When chained, the wrapper holds the right and injects once
+	# at its own end — per-component hints would be redundant there.
+	if [ "$ACQUIRE_TIOCSTI" != "monkey-wezterm" ]; then
+		: # wrapper holds the injection right
+	elif inject_tty "source ${env_file}"; then
+		echo -e "  ${GREEN}Injected 'source ${env_file}' into the current terminal.${NC}"
+	else
+		echo -e "  ${YELLOW}New PATH takes effect in NEW shells. To use it in this terminal now:${NC}"
+		echo -e "    ${CYAN}source ${env_file}${NC}    ${YELLOW}# or simply: ${CYAN}exec \$SHELL${NC}"
+	fi
 	echo ""
 }
 
