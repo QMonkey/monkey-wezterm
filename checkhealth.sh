@@ -14,6 +14,7 @@ WARN="[${YELLOW}!${NC}]"
 
 ALL_PASSED=true
 INSTALL_MODE=false
+SKIP_CONFIG_CHECKS=false
 
 usage() {
 	cat <<EOF
@@ -23,6 +24,9 @@ Check and optionally install dependencies for monkey-wezterm.
 
 OPTIONS
   -i, --install    Install missing dependencies (delegates to install.sh)
+  --skip-check-config
+                   Skip config-file checks (install.sh passes this: the
+                   config symlinks are linked before this script runs)
   -h, --help       Show this help
 
 Exit code: 1 if any required dependency is missing, 0 otherwise.
@@ -34,6 +38,7 @@ parse_args() {
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
 		-i | --install) INSTALL_MODE=true ;;
+		--skip-check-config) SKIP_CONFIG_CHECKS=true ;;
 		-h | --help) usage ;;
 		*)
 			echo "Unknown option: $1"
@@ -112,6 +117,14 @@ print_platform() {
 }
 
 check_config_files() {
+	# --skip-check-config (passed by install.sh): the config symlinks are
+	# the installer's job, and judging them here would misreport a state
+	# the installer is about to create. Standalone runs (the manual
+	# diagnosis entry point) still get the full check.
+	if $SKIP_CONFIG_CHECKS; then
+		echo -e "  ${WARN} config checks skipped (handled by the installer)"
+		return 0
+	fi
 	echo -e "${BOLD}Config files${NC}"
 	local conf="${HOME}/.config/wezterm/wezterm.lua"
 	if [[ -L "$conf" ]]; then
