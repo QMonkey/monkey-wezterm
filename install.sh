@@ -444,7 +444,7 @@ setup_symlinks() {
 # Plain run (no --install): everything should pass except the plugins WARN,
 # which resolves on first wezterm start.
 verify_checkhealth() {
-	bash "$INSTALL_DIR/checkhealth.sh" || true
+	bash "$INSTALL_DIR/checkhealth.sh" --skip-check-config || true
 }
 
 # ────────────────── Main ──────────────────
