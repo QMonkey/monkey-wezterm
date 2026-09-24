@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly CYAN='\033[0;36m'
+readonly BOLD='\033[1m'
+readonly NC='\033[0m'
 
-PASS="[${GREEN}✓${NC}]"
-FAIL="[${RED}✗${NC}]"
-WARN="[${YELLOW}!${NC}]"
+# List-item helpers: 2-space indent, brackets outside the color span,
+# OK centered as [ OK ]. fail() does not abort — checkhealth must keep
+# going and summarize (exit status comes from REQUIRED_FAILURES).
+info() { echo -e "  [${CYAN}INFO${NC}] $*"; }
+ok() { echo -e "  [${GREEN} OK ${NC}] $*"; }
+warn() { echo -e "  [${YELLOW}WARN${NC}] $*"; }
+fail() {
+	echo -e "  [${RED}FAIL${NC}] $*"
+}
 
-ALL_PASSED=true
+REQUIRED_FAILURES=0
 INSTALL_MODE=false
 SKIP_CONFIG_CHECKS=false
 
@@ -98,14 +104,14 @@ print_header() {
 print_wezterm_version() {
 	echo -e "${BOLD}wezterm${NC}"
 	if wezterm_at_least; then
-		echo -e "  ${PASS} $(wezterm --version 2>/dev/null | head -1)"
+		ok "$(wezterm --version 2>/dev/null | head -1)"
 	else
 		if have_native_cmd wezterm; then
-			echo -e "  ${FAIL} $(wezterm --version 2>/dev/null | head -1) (need >= 20240127 for config_builder / plugin API)"
+			fail "$(wezterm --version 2>/dev/null | head -1) (need >= 20240127 for config_builder / plugin API)"
 		else
-			echo -e "  ${FAIL} wezterm (not found)"
+			fail "wezterm (not found)"
 		fi
-		ALL_PASSED=false
+		REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
 	fi
 	echo ""
 }
@@ -122,7 +128,7 @@ check_config_files() {
 	# the installer is about to create. Standalone runs (the manual
 	# diagnosis entry point) still get the full check.
 	if $SKIP_CONFIG_CHECKS; then
-		echo -e "  ${WARN} config checks skipped (handled by the installer)"
+		warn "config checks skipped (handled by the installer)"
 		return 0
 	fi
 	echo -e "${BOLD}Config files${NC}"
@@ -131,16 +137,16 @@ check_config_files() {
 		local target
 		target=$(readlink -f "$conf" 2>/dev/null || readlink "$conf")
 		if [[ -f "$target" ]]; then
-			echo -e "  ${PASS} wezterm.lua → ${target}"
+			ok "wezterm.lua → ${target}"
 		else
-			echo -e "  ${FAIL} wezterm.lua symlink broken → ${target}"
-			ALL_PASSED=false
+			fail "wezterm.lua symlink broken → ${target}"
+			REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
 		fi
 	elif [[ -f "$conf" ]]; then
-		echo -e "  ${WARN} $conf exists but is not a symlink"
+		warn "$conf exists but is not a symlink"
 	else
-		echo -e "  ${FAIL} $conf not found (run: mkdir -p ~/.config/wezterm && ln -s $(pwd)/.wezterm.lua $conf)"
-		ALL_PASSED=false
+		fail "$conf not found (run: mkdir -p ~/.config/wezterm && ln -s $(pwd)/.wezterm.lua $conf)"
+		REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
 	fi
 	echo ""
 }
@@ -149,9 +155,9 @@ check_plugins() {
 	echo -e "${BOLD}Plugins${NC}"
 	local plugins_dir="${HOME}/.local/share/wezterm/plugins"
 	if [[ -d "$plugins_dir" && -n "$(ls -A "$plugins_dir" 2>/dev/null)" ]]; then
-		echo -e "  ${PASS} plugins cloned ($plugins_dir)"
+		ok "plugins cloned ($plugins_dir)"
 	else
-		echo -e "  ${WARN} plugins not cloned yet (tabline.wez auto-clones on first wezterm start)"
+		warn "plugins not cloned yet (tabline.wez auto-clones on first wezterm start)"
 	fi
 	echo ""
 }
@@ -159,15 +165,15 @@ check_plugins() {
 check_rust_toolchain() {
 	echo -e "${BOLD}Rust toolchain${NC} (only needed to build wezterm from source)"
 	if have_native_cmd cargo; then
-		echo -e "  ${PASS} cargo $($HOME/.cargo/bin/cargo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+		ok "cargo $($HOME/.cargo/bin/cargo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 	else
-		echo -e "  ${WARN} rustup/cargo not installed (run install.sh to build wezterm)"
+		warn "rustup/cargo not installed (run install.sh to build wezterm)"
 	fi
 	echo ""
 }
 
 print_summary() {
-	if $ALL_PASSED; then
+	if [ "$REQUIRED_FAILURES" -eq 0 ]; then
 		echo -e "${GREEN}${BOLD}All required dependencies satisfied.${NC}"
 		exit 0
 	else
@@ -189,7 +195,7 @@ main() {
 	check_config_files
 	check_plugins
 	check_rust_toolchain
-	if $INSTALL_MODE && ! $ALL_PASSED; then
+	if $INSTALL_MODE && [ "$REQUIRED_FAILURES" -gt 0 ]; then
 		# The only hard dependency is wezterm itself, and building it needs
 		# the full toolchain — that is install.sh's job, not a piecemeal
 		# install here.
