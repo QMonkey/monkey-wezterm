@@ -1,32 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly CYAN='\033[0;36m'
-readonly BOLD='\033[1m'
-readonly NC='\033[0m'
+# ──────────────────────────────────────────────────────────────
+# monkey-wezterm dependency check
+#
+# The check framework lives in scripts/ (a `git subtree` of
+# github.com/QMonkey/monkey-scripts) — this file only declares WHAT to check.
+# ──────────────────────────────────────────────────────────────
 
-# List-item helpers: 2-space indent, brackets outside the color span,
-# OK centered as [ OK ]. fail() does not abort — checkhealth must keep
-# going and summarize (exit status comes from REQUIRED_FAILURES).
-info() { echo -e "  [${CYAN}INFO${NC}] $*"; }
-ok() { echo -e "  [${GREEN} OK ${NC}] $*"; }
-warn() { echo -e "  [${YELLOW}WARN${NC}] $*"; }
-fail() {
-	echo -e "  [${RED}FAIL${NC}] $*"
+. "$(dirname "${BASH_SOURCE[0]:-$0}")/scripts/checkhealth.sh" || {
+	echo "monkey-scripts not found — update this checkout (git pull / re-clone)," >&2
+	echo "or run install.sh, which bootstraps monkey-scripts itself." >&2
+	exit 1
 }
 
-REQUIRED_FAILURES=0
-INSTALL_MODE=false
-SKIP_CONFIG_CHECKS=false
+# ──────────────────────── identity ────────────────────────
+PROJECT=monkey-wezterm
 
+# No required/recommended lists: wezterm itself is built by install.sh
+# (which is also where --install hands over to), plugins and the rust
+# toolchain are informational.
+CONFIG_PHASE=early # config is checked right after Platform, before plugins
+
+# ──────────────────────── usage (wording differs) ────────────────────────
 usage() {
 	cat <<EOF
 Usage: $0 [OPTIONS]
 
-Check and optionally install dependencies for monkey-wezterm.
+Check and optionally install dependencies for ${PROJECT}.
 
 OPTIONS
   -i, --install    Install missing dependencies (delegates to install.sh)
@@ -40,41 +41,11 @@ EOF
 	exit 0
 }
 
-parse_args() {
-	while [[ $# -gt 0 ]]; do
-		case "$1" in
-		-i | --install) INSTALL_MODE=true ;;
-		--skip-check-config) SKIP_CONFIG_CHECKS=true ;;
-		-h | --help) usage ;;
-		*)
-			echo "Unknown option: $1"
-			usage
-			;;
-		esac
-		shift
-	done
-}
-
-# ──────────────────────────── helpers ────────────────────────────
-
-# WSL interop appends the WINDOWS PATH to ours, so tools installed on the
-# Windows side appear as /mnt/c/... shims. They are NOT Linux binaries.
-# Treat /mnt/* resolutions as "not installed".
-have_native_cmd() {
-	command -v "$1" &>/dev/null || return 1
-	case "$(command -v "$1")" in
-	/mnt/*) return 1 ;; # WSL Windows-interop shim
-	esac
-	return 0
-}
-
-# Absolute path to a LINUX sudo, or non-zero.
-native_sudo() {
-	local p
-	have_native_cmd sudo || return 1
-	p=$(command -v sudo)
-	printf '%s' "$p"
-}
+# ──────────────────────── wezterm version ────────────────────────
+# Printed between the title and Platform (the original's main sequence).
+# Failures are folded into REQUIRED_FAILURES by checkhealth_extra —
+# run_required_checks resets the counter after this hook ran.
+WEZTERM_VERSION_FAILED=0
 
 # wezterm versions are date-based: "wezterm 20240127-113934-3aa51d5a".
 # The config needs 20240127+ (config_builder, plugin API, kitty keyboard).
@@ -86,22 +57,7 @@ wezterm_at_least() {
 	((ver >= 20240127))
 }
 
-os_detect() {
-	case "$(uname -s)" in
-	Linux) echo "linux" ;;
-	Darwin) echo "macos" ;;
-	*) echo "unknown" ;;
-	esac
-}
-
-# ──────────────────── phases ────────────────────────────
-
-print_header() {
-	echo -e "${BOLD}monkey-wezterm dependency check${NC}"
-	echo ""
-}
-
-print_wezterm_version() {
+print_header_extra() {
 	echo -e "${BOLD}wezterm${NC}"
 	if wezterm_at_least; then
 		ok "$(wezterm --version 2>/dev/null | head -1)"
@@ -111,17 +67,19 @@ print_wezterm_version() {
 		else
 			fail "wezterm (not found)"
 		fi
-		REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
+		WEZTERM_VERSION_FAILED=1
 	fi
 	echo ""
 }
 
+# wezterm's Platform section is uname only — no package-manager line.
 print_platform() {
 	echo -e "${BOLD}Platform${NC}"
 	echo -e "  OS: ${CYAN}$(uname -s)${NC}"
 	echo ""
 }
 
+# ──────────────────────── sections ────────────────────────
 check_config_files() {
 	# --skip-check-config (passed by install.sh): the config symlinks are
 	# the installer's job, and judging them here would misreport a state
@@ -172,33 +130,17 @@ check_rust_toolchain() {
 	echo ""
 }
 
-print_summary() {
-	if [ "$REQUIRED_FAILURES" -eq 0 ]; then
-		echo -e "${GREEN}${BOLD}All required dependencies satisfied.${NC}"
-		exit 0
-	else
-		echo -e "${RED}${BOLD}Some required dependencies are missing.${NC}"
-		if ! $INSTALL_MODE; then
-			echo -e "Run ${CYAN}$0 --install${NC} to install them automatically."
-		fi
-		exit 1
+# Plugins + Rust toolchain run after the config section, then --install
+# hands the whole job over to install.sh (building wezterm needs the full
+# toolchain — not a piecemeal install here). Delegation ends the script
+# with install.sh's own output and exit status propagated: no summary.
+checkhealth_extra() {
+	if [ "$WEZTERM_VERSION_FAILED" = 1 ]; then
+		REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
 	fi
-}
-
-# ──────────────────── main ────────────────────
-
-main() {
-	parse_args "$@"
-	print_header
-	print_wezterm_version
-	print_platform
-	check_config_files
 	check_plugins
 	check_rust_toolchain
 	if $INSTALL_MODE && [ "$REQUIRED_FAILURES" -gt 0 ]; then
-		# The only hard dependency is wezterm itself, and building it needs
-		# the full toolchain — that is install.sh's job, not a piecemeal
-		# install here.
 		local script_dir
 		script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 		if [ -f "$script_dir/install.sh" ]; then
@@ -207,9 +149,8 @@ main() {
 			echo -e "${RED}install.sh not found next to checkhealth.sh — run it from the repo, or see https://wezterm.org/installation${NC}"
 			exit 1
 		fi
-		return 0
+		exit 0
 	fi
-	print_summary
 }
 
-main "$@"
+checkhealth_main "$@"
