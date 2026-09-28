@@ -32,6 +32,8 @@ Build WezTerm from source (distro packages lag far behind) and install monkey-we
 curl -fsSL https://raw.githubusercontent.com/QMonkey/monkey-wezterm/master/install.sh | bash
 ```
 
+> The one-liner needs `git` besides `curl` itself: the installer clones this repository into `~/Documents/monkey-wezterm` before it can install anything. If `git` is missing, the script stops with an error — install it with your system's package manager and re-run the same command.
+
 What the script does, step by step:
 
 1. Set up the build environment: rustup (non-interactive), the wezterm source tree with submodules (missing submodules fail with a confusing zlib error), and the system libraries via wezterm's own `./get-deps` script (knows the package names for all supported distros)
