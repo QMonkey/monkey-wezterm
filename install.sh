@@ -60,7 +60,24 @@ if [ ! -f "$_monkey_scripts/install.sh" ]; then
 			echo "  move it aside, delete it, or set INSTALL_DIR elsewhere." >&2
 			exit 1
 		else
-			git clone "$PROJECT_REPO" "$INSTALL_DIR" || exit 1
+			# No retry() available yet — the framework loads only after this
+		# clone succeeds — so inline the standard 3 attempts. A failed clone
+		# leaves a partial directory behind; remove it so the next attempt
+		# cannot trip over "already exists". This branch only runs on a
+		# fresh install (INSTALL_DIR did not exist or was empty), so the rm
+		# can never delete pre-existing data.
+		_monkey_rc=1
+		for _monkey_attempt in 1 2 3; do
+			if git clone "$PROJECT_REPO" "$INSTALL_DIR"; then
+				_monkey_rc=0
+				break
+			fi
+			rm -rf "$INSTALL_DIR"
+			if [ "$_monkey_attempt" -lt 3 ]; then
+				sleep 2
+			fi
+		done
+		[ "$_monkey_rc" -eq 0 ] || exit 1
 		fi
 		# </dev/null: on the curl|bash path stdin is the script pipe, and the
 		# inner installer must not read what is left of the outer one.
@@ -93,9 +110,17 @@ ensure_rustup() {
 		ok "rust toolchain already installed."
 		return 0
 	fi
-	# Official rustup installer (BUILD.md: Rust 1.71+ required).
+	# Official rustup installer (BUILD.md: Rust 1.71+ required). Downloaded
+	# fully before executing, with retries — `curl | sh` would run a
+	# truncated script if the connection drops mid-stream.
 	info "Installing rustup (non-interactive)..."
-	curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+	local rustup_init="/tmp/rustup_init.$$.sh"
+	if retry -s "rustup installer download" curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$rustup_init"; then
+		sh "$rustup_init" -y
+		rm -f "$rustup_init"
+	else
+		fail "rustup installer download failed — install it manually: https://rust-lang.org/tools/install/"
+	fi
 	# rustup installs into ~/.cargo — put cargo on PATH for this run (the
 	# cargo build below runs in this same script). Not `[ ... ] && . ...`:
 	# a missing file would make the function return non-zero and, under
@@ -108,13 +133,24 @@ ensure_rustup() {
 ensure_wezterm_source() {
 	if [ -d "$WEZTERM_SRC_DIR/.git" ]; then
 		info "wezterm source already exists at $WEZTERM_SRC_DIR — pulling latest..."
-		git -C "$WEZTERM_SRC_DIR" pull --ff-only || warn "git pull failed — building from existing source."
-		git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive || warn "submodule update failed — build may fail with a zlib error."
+		retry -s "git pull" git -C "$WEZTERM_SRC_DIR" pull --ff-only ||
+			warn "git pull failed — building from existing source."
+		retry -s "git submodule update" git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive ||
+			warn "submodule update failed — build may fail with a zlib error."
 	else
 		# BUILD.md: submodules are REQUIRED (missing them fails with a
-		# confusing zlib error), hence --recursive.
+		# confusing zlib error), hence --recursive. A failed clone leaves a
+		# partial directory behind, which would make every later attempt
+		# (and re-run) fail with "already exists" — clean it up before
+		# giving up, but only when git created it (.git inside) or it is
+		# empty, never when it holds pre-existing user data.
 		info "Cloning wezterm source (with submodules)..."
-		git clone --depth=1 --branch=main --recursive https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR"
+		if ! retry -s "git clone wezterm" git clone --depth=1 --branch=main --recursive https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR"; then
+			if [ -d "$WEZTERM_SRC_DIR" ] && { [ -z "$(ls -A "$WEZTERM_SRC_DIR")" ] || [ -d "$WEZTERM_SRC_DIR/.git" ]; }; then
+				rm -rf "$WEZTERM_SRC_DIR"
+			fi
+			fail "wezterm source clone failed after 3 attempts."
+		fi
 	fi
 }
 
@@ -136,7 +172,11 @@ install_build_deps() {
 	fi
 	ensure_wezterm_source
 	info "Installing wezterm system dependencies via ./get-deps..."
-	(cd "$WEZTERM_SRC_DIR" && ./get-deps) || warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
+	# get-deps drives the distro package manager over the network — exactly
+	# the kind of call that fails transiently, so give it the standard
+	# retries. It is idempotent (already-installed packages are skipped).
+	(cd "$WEZTERM_SRC_DIR" && retry -s "wezterm get-deps" ./get-deps) ||
+		warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
 }
 
 # wezterm versions are date-based: "wezterm 20240127-113934-3aa51d5a".
