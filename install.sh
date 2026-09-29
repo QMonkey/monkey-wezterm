@@ -115,8 +115,10 @@ ensure_rustup() {
 	# truncated script if the connection drops mid-stream.
 	info "Installing rustup (non-interactive)..."
 	local rustup_init="/tmp/rustup_init.$$.sh"
-	if retry -s "rustup installer download" curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$rustup_init"; then
-		sh "$rustup_init" -y
+	if retry -t 1800 -s "rustup installer download" curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$rustup_init"; then
+		# The -y run downloads the whole toolchain (hundreds of MB) — long
+		# timeout, retried: rustup-init is idempotent, a retry continues.
+		retry -t 3600 -s "rustup toolchain install" sh "$rustup_init" -y
 		rm -f "$rustup_init"
 	else
 		fail "rustup installer download failed — install it manually: https://rust-lang.org/tools/install/"
@@ -145,7 +147,7 @@ ensure_wezterm_source() {
 		# giving up, but only when git created it (.git inside) or it is
 		# empty, never when it holds pre-existing user data.
 		info "Cloning wezterm source (with submodules)..."
-		if ! retry -s "git clone wezterm" git clone --depth=1 --branch=main --recursive https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR"; then
+		if ! retry -t 1800 -s "git clone wezterm" git clone --depth=1 --branch=main --recursive https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR"; then
 			if [ -d "$WEZTERM_SRC_DIR" ] && { [ -z "$(ls -A "$WEZTERM_SRC_DIR")" ] || [ -d "$WEZTERM_SRC_DIR/.git" ]; }; then
 				rm -rf "$WEZTERM_SRC_DIR"
 			fi
@@ -175,7 +177,7 @@ install_build_deps() {
 	# get-deps drives the distro package manager over the network — exactly
 	# the kind of call that fails transiently, so give it the standard
 	# retries. It is idempotent (already-installed packages are skipped).
-	(cd "$WEZTERM_SRC_DIR" && retry -s "wezterm get-deps" ./get-deps) ||
+	(cd "$WEZTERM_SRC_DIR" && retry -t 1800 -s "wezterm get-deps" ./get-deps) ||
 		warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
 }
 
@@ -200,7 +202,7 @@ build_wezterm() {
 	# This is the long pole: a full rust release build runs 10-30 minutes
 	# with NO output from cargo itself — spell out that the wait is normal.
 	info "Compiling wezterm (cargo build --release) — 10-30 minutes, no output below until done..."
-	cargo build --release 2>&1 | tee /tmp/wezterm-build.log || {
+	retry -t 1800 -s "cargo build wezterm" cargo build --release 2>&1 | tee /tmp/wezterm-build.log || {
 		fail "wezterm build failed. Check /tmp/wezterm-build.log"
 	}
 	popd >/dev/null
