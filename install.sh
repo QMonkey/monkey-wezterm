@@ -140,18 +140,23 @@ ensure_wezterm_source() {
 		retry -s "git submodule update" git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive ||
 			warn "submodule update failed — build may fail with a zlib error."
 	else
-		# BUILD.md: submodules are REQUIRED (missing them fails with a
-		# confusing zlib error), hence --recursive. A failed clone leaves a
-		# partial directory behind, which would make every later attempt
-		# (and re-run) fail with "already exists" — clean it up before
-		# giving up, but only when git created it (.git inside) or it is
-		# empty, never when it holds pre-existing user data.
-		info "Cloning wezterm source (with submodules)..."
-		if ! retry -t 1800 -s "git clone wezterm" git clone --depth=1 --branch=main --recursive https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR"; then
-			if [ -d "$WEZTERM_SRC_DIR" ] && { [ -z "$(ls -A "$WEZTERM_SRC_DIR")" ] || [ -d "$WEZTERM_SRC_DIR/.git" ]; }; then
-				rm -rf "$WEZTERM_SRC_DIR"
-			fi
-			fail "wezterm source clone failed after 3 attempts."
+		# Two-phase clone, each phase retried on its own:
+		#   phase 1 — the main repo (shallow, small: its 1800s budget is
+		#             effectively dedicated to it)
+		#   phase 2 — submodules, which is where a slow mirror used to eat
+		#             the whole budget and take the finished main clone down
+		#             with it (one real attempt, then three fake
+		#             "already exists" failures). Phase 2 is naturally
+		#             resumable — git skips submodules that already checked
+		#             out — so retries continue where the last one died and
+		#             no cleanup is needed.
+		info "Cloning wezterm source..."
+		if ! retry -t 1800 -s "git clone wezterm" git clone --depth=1 --branch=main https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR"; then
+			fail "wezterm source clone failed."
+		fi
+		info "Fetching submodules..."
+		if ! retry -t 1800 -s "git submodule wezterm" git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive; then
+			fail "wezterm submodule fetch failed — re-run the installer to resume."
 		fi
 	fi
 }
