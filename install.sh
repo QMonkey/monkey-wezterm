@@ -27,30 +27,30 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/Documents/monkey-wezterm}"
 # commit (pull it in and carry on) or `curl | bash`, which has no checkout
 # at all. The latter clones THIS project and runs the install.sh from that
 # checkout, so installer and scripts/ always come from the same revision.
+# No scripts/ next to this file: either a checkout predating the subtree
+# commit (pull it in and carry on), a .git-less directory (zip/tarball),
+# or `curl | bash`, which has no checkout at all. The latter two bootstrap
+# through INSTALL_DIR and run the install.sh from that checkout, so
+# installer and scripts/ always come from the same revision.
 _monkey_scripts="$(dirname "${BASH_SOURCE[0]:-$0}")/scripts"
 if [ ! -f "$_monkey_scripts/install.sh" ]; then
 	_monkey_self="${BASH_SOURCE[0]:-$0}"
 	_monkey_dir="$(dirname "$_monkey_self")"
 	if [ -f "$_monkey_self" ] && [ -d "$_monkey_dir/.git" ]; then
+		# Outdated checkout: update it in place and keep running from it.
 		git -C "$_monkey_dir" pull --ff-only || true
-		_monkey_scripts="$_monkey_dir/scripts"
-		if [ ! -f "$_monkey_scripts/install.sh" ]; then
+		if [ ! -f "$_monkey_dir/scripts/install.sh" ]; then
 			echo "monkey-scripts missing from $_monkey_dir (no scripts/ subtree)." >&2
 			echo "  git -C $_monkey_dir pull    # outdated checkout — or the repo never added the subtree" >&2
 			exit 1
 		fi
+		_monkey_scripts="$_monkey_dir/scripts"
 	else
-		# curl|bash: no checkout at all. Get one that carries scripts/ and
-		# hand over to its installer, so install.sh and scripts/ can never be
-		# different revisions. clone_monkey_project cannot do this job — it
-		# lives in the very scripts/ being fetched. INSTALL_DIR is where the
-		# framework's clone step would have put the checkout too, so that step
-		# only confirms it.
-
-		if ! command -v git >/dev/null 2>&1; then
-			echo "git is required to clone $PROJECT — install it first (e.g. sudo apt-get install git), then re-run." >&2
-			exit 1
-		fi
+		# curl|bash or a .git-less directory: the only path to a
+		# same-revision scripts/ is the INSTALL_DIR checkout.
+		# clone_monkey_project cannot do this job — it lives in the very
+		# scripts/ being fetched. INSTALL_DIR is where the framework's clone
+		# step would have put the checkout too, so that step only confirms it.
 		if [ -d "$INSTALL_DIR/.git" ]; then
 			# An install already lives here: update it, then run that one.
 			git -C "$INSTALL_DIR" pull --ff-only || true
@@ -60,24 +60,31 @@ if [ ! -f "$_monkey_scripts/install.sh" ]; then
 			echo "  move it aside, delete it, or set INSTALL_DIR elsewhere." >&2
 			exit 1
 		else
+			# Fresh clone — the ONLY sub-branch where git is hard-required:
+			# the pull sub-branch above degrades gracefully without it, and
+			# a zip/tarball must not fail here just for a missing git.
+			if ! command -v git >/dev/null 2>&1; then
+				echo "git is required to clone $PROJECT — install it first (e.g. sudo apt-get install git), then re-run." >&2
+				exit 1
+			fi
 			# No retry() available yet — the framework loads only after this
-		# clone succeeds — so inline the standard 3 attempts. A failed clone
-		# leaves a partial directory behind; remove it so the next attempt
-		# cannot trip over "already exists". This branch only runs on a
-		# fresh install (INSTALL_DIR did not exist or was empty), so the rm
-		# can never delete pre-existing data.
-		_monkey_rc=1
-		for _monkey_attempt in 1 2 3; do
-			if git clone "$PROJECT_REPO" "$INSTALL_DIR"; then
-				_monkey_rc=0
-				break
-			fi
-			rm -rf "$INSTALL_DIR"
-			if [ "$_monkey_attempt" -lt 3 ]; then
-				sleep 2
-			fi
-		done
-		[ "$_monkey_rc" -eq 0 ] || exit 1
+			# clone succeeds — so inline the standard 3 attempts. A failed
+			# clone leaves a partial directory behind; remove it so the next
+			# attempt cannot trip over "already exists". This branch only
+			# runs on a fresh install (INSTALL_DIR did not exist or was
+			# empty), so the rm can never delete pre-existing data.
+			_monkey_rc=1
+			for _monkey_attempt in 1 2 3; do
+				if git clone "$PROJECT_REPO" "$INSTALL_DIR"; then
+					_monkey_rc=0
+					break
+				fi
+				rm -rf "$INSTALL_DIR"
+				if [ "$_monkey_attempt" -lt 3 ]; then
+					sleep 2
+				fi
+			done
+			[ "$_monkey_rc" -eq 0 ] || exit 1
 		fi
 		# </dev/null: on the curl|bash path stdin is the script pipe, and the
 		# inner installer must not read what is left of the outer one.
@@ -94,6 +101,9 @@ CHECKHEALTH_MODE=verify     # plain run — --install would recurse into here
 INSTALL_INFO=(
 	"wezterm source: ${CYAN}$WEZTERM_SRC_DIR${NC} (kept for future updates)"
 )
+SYMLINKS=(
+	"$INSTALL_DIR/.wezterm.lua|$HOME/.config/wezterm/wezterm.lua"
+)
 SUMMARY_LINES=(
 	"  Config:   ${CYAN}$INSTALL_DIR/.wezterm.lua${NC} → ${CYAN}~/.config/wezterm/wezterm.lua${NC}"
 	"  Plugins:  ${CYAN}~/.local/share/wezterm/plugins/${NC} (tabline.wez, auto-cloned on first start)"
@@ -104,33 +114,6 @@ SUMMARY_LINES=(
 )
 
 # ──────────────────────── build steps (verbatim) ────────────────────────
-
-ensure_rustup() {
-	if have_native_cmd cargo; then
-		ok "rust toolchain already installed."
-		return 0
-	fi
-	# Official rustup installer (BUILD.md: Rust 1.71+ required). Downloaded
-	# fully before executing, with retries — `curl | sh` would run a
-	# truncated script if the connection drops mid-stream.
-	info "Installing rustup (non-interactive)..."
-	local rustup_init="/tmp/rustup_init.$$.sh"
-	if retry -t 1800 -s "rustup installer download" curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$rustup_init"; then
-		# The -y run downloads the whole toolchain (hundreds of MB) — long
-		# timeout, retried: rustup-init is idempotent, a retry continues.
-		retry -t 3600 -s "rustup toolchain install" sh "$rustup_init" -y
-		rm -f "$rustup_init"
-	else
-		fail "rustup installer download failed — install it manually: https://rust-lang.org/tools/install/"
-	fi
-	# rustup installs into ~/.cargo — put cargo on PATH for this run (the
-	# cargo build below runs in this same script). Not `[ ... ] && . ...`:
-	# a missing file would make the function return non-zero and, under
-	# set -e, silently abort the whole script.
-	if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
-	have_native_cmd cargo || fail "rustup installation failed — install it manually: https://rust-lang.org/tools/install/"
-	ok "rustup installed."
-}
 
 ensure_wezterm_source() {
 	if [ -d "$WEZTERM_SRC_DIR/.git" ]; then
@@ -164,19 +147,15 @@ ensure_wezterm_source() {
 install_build_deps() {
 	# git is needed to clone the sources; every other system dependency is
 	# installed by wezterm's own ./get-deps script, which knows the package
-	# names for all supported distros (and macOS via brew).
-	if ! have_native_cmd git; then
-		info "Installing git..."
-		install_pkg git || :
-	fi
-	have_native_cmd git || fail "git installation failed — install it manually."
+	# names for all supported distros (and macOS via brew). ensure_git and
+	# ensure_rustup live in the shared framework (pkg.sh).
+	ensure_git
 	ensure_rustup
 	# apt lists on fresh/WSL images are often stale or lack the universe
 	# index that some of wezterm's ./get-deps packages live in — get-deps
-	# does not run apt-get update itself.
-	if have_native_cmd apt-get; then
-		sudo_cmd apt-get update -q || true
-	fi
+	# does not run apt-get update itself. refresh_pkg (pkg.sh) is distro-
+	# aware, retried, and guarded to one refresh per run.
+	refresh_pkg
 	ensure_wezterm_source
 	info "Installing wezterm system dependencies via ./get-deps..."
 	# get-deps drives the distro package manager over the network — exactly
@@ -241,15 +220,6 @@ install_step_prepare() {
 install_step_tool() {
 	build_wezterm
 	echo ""
-}
-
-# The original force-links with ln -sf and reports a fixed, repo-relative
-# path — kept verbatim (overrides the shared setup_symlinks).
-setup_symlinks() {
-	info "Setting up configuration symlinks..."
-	mkdir -p "$HOME/.config/wezterm"
-	ln -sf "$INSTALL_DIR/.wezterm.lua" "$HOME/.config/wezterm/wezterm.lua"
-	ok ".config/wezterm/wezterm.lua → $INSTALL_DIR/.wezterm.lua"
 }
 
 install_main "$@"
