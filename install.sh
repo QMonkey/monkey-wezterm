@@ -116,32 +116,14 @@ SUMMARY_LINES=(
 # ──────────────────────── build steps (verbatim) ────────────────────────
 
 ensure_wezterm_source() {
-	if [ -d "$WEZTERM_SRC_DIR/.git" ]; then
-		info "wezterm source already exists at $WEZTERM_SRC_DIR — pulling latest..."
-		retry -s "git pull" git -C "$WEZTERM_SRC_DIR" pull --ff-only ||
-			warn "git pull failed — building from existing source."
-		retry -s "git submodule update" git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive ||
-			warn "submodule update failed — build may fail with a zlib error."
-	else
-		# Two-phase clone, each phase retried on its own:
-		#   phase 1 — the main repo (shallow, small: its 1800s budget is
-		#             effectively dedicated to it)
-		#   phase 2 — submodules, which is where a slow mirror used to eat
-		#             the whole budget and take the finished main clone down
-		#             with it (one real attempt, then three fake
-		#             "already exists" failures). Phase 2 is naturally
-		#             resumable — git skips submodules that already checked
-		#             out — so retries continue where the last one died and
-		#             no cleanup is needed.
-		info "Cloning wezterm source..."
-		if ! retry -t 1800 -s "git clone wezterm" git clone --depth=1 --branch=main https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR"; then
-			fail "wezterm source clone failed."
-		fi
-		info "Fetching submodules..."
-		if ! retry -t 1800 -s "git submodule wezterm" git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive; then
-			fail "wezterm submodule fetch failed — re-run the installer to resume."
-		fi
-	fi
+	clone_repo --depth=1 --branch=main https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR" ||
+		fail "wezterm source clone failed."
+	# Submodules are fetched after BOTH paths of clone_repo (fresh clone and
+	# pull) — git submodule update is idempotent (already-checked-out
+	# submodules are skipped), so one unconditional call covers both.
+	info "Fetching submodules..."
+	retry -t 1800 -s "git submodule wezterm" git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive ||
+		fail "wezterm submodule fetch failed — re-run the installer to resume."
 }
 
 install_build_deps() {
