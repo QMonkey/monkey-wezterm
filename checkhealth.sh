@@ -80,66 +80,29 @@ print_platform() {
 }
 
 # ──────────────────────── sections ────────────────────────
-check_config_files() {
-	# --skip-check-config (passed by install.sh): the config symlinks are
-	# the installer's job, and judging them here would misreport a state
-	# the installer is about to create. Standalone runs (the manual
-	# diagnosis entry point) still get the full check.
-	if $SKIP_CONFIG_CHECKS; then
-		warn "config checks skipped (handled by the installer)"
-		return 0
-	fi
-	echo -e "${BOLD}Config files${NC}"
-	local conf="${HOME}/.config/wezterm/wezterm.lua"
-	if [[ -L "$conf" ]]; then
-		local target
-		target=$(readlink -f "$conf" 2>/dev/null || readlink "$conf")
-		if [[ -f "$target" ]]; then
-			ok "wezterm.lua → ${target}"
-		else
-			fail "wezterm.lua symlink broken → ${target}"
-			REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
-		fi
-	elif [[ -f "$conf" ]]; then
-		warn "$conf exists but is not a symlink"
-	else
-		fail "$conf not found (run: mkdir -p ~/.config/wezterm && ln -s $(pwd)/.wezterm.lua $conf)"
-		REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
-	fi
-	echo ""
-}
+# src|dst|desc|mode|name|hint — the generic check_config_files covers every
+# case the old override handled (broken symlink → fail, plain file → warn,
+# missing → fail with the re-link hint).
+REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+CONFIG_LINKS=(
+	"$REPO_DIR/.wezterm.lua|$HOME/.config/wezterm/wezterm.lua|wezterm.lua|||wezterm.lua not found (run: mkdir -p ~/.config/wezterm && ln -s $REPO_DIR/.wezterm.lua ~/.config/wezterm/wezterm.lua)"
+)
+# title|note|type|params|ok|incomplete|missing — the trailing "/" in params
+# requires a NON-EMPTY directory (a bare plugins/ dir means nothing cloned).
+# {ver} in an ok message expands to the tool's first version number.
+ADVISORY_SECTIONS=(
+	"Plugins||path|$HOME/.local/share/wezterm/plugins/|plugins cloned||plugins not cloned yet (tabline.wez auto-clones on first wezterm start)"
+	"Rust toolchain|(only needed to build wezterm from source)|cmd|cargo|cargo {ver}||rustup/cargo not installed (run install.sh to build wezterm)"
+)
 
-check_plugins() {
-	echo -e "${BOLD}Plugins${NC}"
-	local plugins_dir="${HOME}/.local/share/wezterm/plugins"
-	if [[ -d "$plugins_dir" && -n "$(ls -A "$plugins_dir" 2>/dev/null)" ]]; then
-		ok "plugins cloned ($plugins_dir)"
-	else
-		warn "plugins not cloned yet (tabline.wez auto-clones on first wezterm start)"
-	fi
-	echo ""
-}
-
-check_rust_toolchain() {
-	echo -e "${BOLD}Rust toolchain${NC} (only needed to build wezterm from source)"
-	if have_native_cmd cargo; then
-		ok "cargo $($HOME/.cargo/bin/cargo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-	else
-		warn "rustup/cargo not installed (run install.sh to build wezterm)"
-	fi
-	echo ""
-}
-
-# Plugins + Rust toolchain run after the config section, then --install
-# hands the whole job over to install.sh (building wezterm needs the full
-# toolchain — not a piecemeal install here). Delegation ends the script
-# with install.sh's own output and exit status propagated: no summary.
+# Plugins + Rust toolchain are advisory sections now; --install hands the
+# whole job over to install.sh (building wezterm needs the full toolchain —
+# not a piecemeal install here). Delegation ends the script with install.sh's
+# own output and exit status propagated: no summary.
 checkhealth_extra() {
 	if [ "$WEZTERM_VERSION_FAILED" = 1 ]; then
 		REQUIRED_FAILURES=$((REQUIRED_FAILURES + 1))
 	fi
-	check_plugins
-	check_rust_toolchain
 	if $INSTALL_MODE && [ "$REQUIRED_FAILURES" -gt 0 ]; then
 		local script_dir
 		script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
