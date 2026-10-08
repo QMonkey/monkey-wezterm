@@ -126,7 +126,11 @@ ensure_wezterm_source() {
 		fail "wezterm submodule fetch failed — re-run the installer to resume."
 }
 
-install_build_deps() {
+# wezterm's own build-prep + dependency step. Deliberately NOT named
+# install_build_deps: that would shadow the framework's per-distro group
+# table (pkg.sh) for this whole process — and the two share nothing (the
+# distro package names live in wezterm's ./get-deps script, not here).
+install_wezterm_build_deps() {
 	# git is needed to clone the sources; every other system dependency is
 	# installed by wezterm's own ./get-deps script, which knows the package
 	# names for all supported distros (and macOS via brew). ensure_git and
@@ -195,7 +199,7 @@ build_wezterm() {
 # No blank line before the first step: the original runs it right after
 # setup_sudo; the trailing blank is its own.
 install_step_prepare() {
-	install_build_deps
+	install_wezterm_build_deps
 	echo ""
 }
 
