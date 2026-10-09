@@ -24,10 +24,6 @@ PROJECT_REPO=https://github.com/QMonkey/monkey-wezterm.git
 INSTALL_DIR="${INSTALL_DIR:-$HOME/Documents/monkey-wezterm}"
 
 # No scripts/ next to this file: either a checkout predating the subtree
-# commit (pull it in and carry on) or `curl | bash`, which has no checkout
-# at all. The latter clones THIS project and runs the install.sh from that
-# checkout, so installer and scripts/ always come from the same revision.
-# No scripts/ next to this file: either a checkout predating the subtree
 # commit (pull it in and carry on), a .git-less directory (zip/tarball),
 # or `curl | bash`, which has no checkout at all. The latter two bootstrap
 # through INSTALL_DIR and run the install.sh from that checkout, so
@@ -116,14 +112,11 @@ SUMMARY_LINES=(
 # ──────────────────────── build steps (verbatim) ────────────────────────
 
 ensure_wezterm_source() {
-	clone_repo --depth=1 --branch=main https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR" ||
-		fail "wezterm source clone failed."
-	# Submodules are fetched after BOTH paths of clone_repo (fresh clone and
-	# pull) — git submodule update is idempotent (already-checked-out
-	# submodules are skipped), so one unconditional call covers both.
-	info "Fetching submodules..."
-	retry -t 1800 -s "git submodule wezterm" git -C "$WEZTERM_SRC_DIR" submodule update --init --recursive ||
-		fail "wezterm submodule fetch failed — re-run the installer to resume."
+	# --submodules: shallow two-step fetch (clone --depth=1, then submodule
+	# update after both clone_repo paths) — idempotent, retried; failure is
+	# fatal: a partial submodule tree breaks the build.
+	clone_repo --submodules --branch=main https://github.com/wez/wezterm.git "$WEZTERM_SRC_DIR" ||
+		fail "wezterm source clone failed — re-run the installer to resume."
 }
 
 # wezterm's own build-prep + dependency step. Deliberately NOT named
@@ -154,11 +147,7 @@ install_wezterm_build_deps() {
 # wezterm versions are date-based: "wezterm 20240127-113934-3aa51d5a".
 # The config needs 20240127+ (config_builder, plugin API, kitty keyboard).
 wezterm_at_least() {
-	have_native_cmd wezterm || return 1
-	local ver
-	ver=$(wezterm --version 2>/dev/null | grep -oE '[0-9]{8}' | head -1)
-	[[ -z "$ver" ]] && return 1
-	((ver >= 20240127))
+	bin_at_least wezterm 20240127 '[0-9]{8}'
 }
 
 build_wezterm() {
@@ -194,7 +183,7 @@ build_wezterm() {
 	fi
 }
 
-# ──────────────────────── project steps ────────────────────────
+# ──────────────────────── hooks ────────────────────────
 
 # No blank line before the first step: the original runs it right after
 # setup_sudo; the trailing blank is its own.
