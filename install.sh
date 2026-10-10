@@ -127,9 +127,11 @@ install_wezterm_build_deps() {
 	# git is needed to clone the sources; every other system dependency is
 	# installed by wezterm's own ./get-deps script, which knows the package
 	# names for all supported distros (and macOS via brew). ensure_git and
-	# ensure_rustup live in the shared framework (pkg.sh).
+	# ensure_rust live in the shared framework (pkg.sh).
 	ensure_git
-	ensure_rustup
+	# ensure_rust is non-fatal (warn + rc 1) for the checkhealth strategies;
+	# here a missing toolchain must abort the install, as ensure_rustup did.
+	ensure_rust || die "rustup installation failed — install it manually: https://rust-lang.org/tools/install/"
 	# apt lists on fresh/WSL images are often stale or lack the universe
 	# index that some of wezterm's ./get-deps packages live in — get-deps
 	# does not run apt-get update itself. refresh_pkg (pkg.sh) is distro-
