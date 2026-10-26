@@ -126,8 +126,8 @@ ensure_wezterm_source() {
 install_wezterm_build_deps() {
 	# git is needed to clone the sources; every other system dependency is
 	# installed by wezterm's own ./get-deps script, which knows the package
-	# names for all supported distros (and macOS via brew). ensure_git and
-	# ensure_rust live in the shared framework (pkg.sh).
+	# names for all supported distros (and macOS via brew). ensure_git
+	# (lib/pkg.sh) and ensure_rust (lib/toolchain.sh) live in the shared framework.
 	ensure_git
 	# ensure_rust is non-fatal (warn + rc 1) for the checkhealth strategies;
 	# here a missing toolchain must abort the install, as ensure_rustup did.
@@ -142,8 +142,15 @@ install_wezterm_build_deps() {
 	# get-deps drives the distro package manager over the network — exactly
 	# the kind of call that fails transiently, so give it the standard
 	# retries. It is idempotent (already-installed packages are skipped).
-	(cd "$WEZTERM_SRC_DIR" && retry -t 1800 -s "wezterm get-deps" ./get-deps) ||
-		warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
+	# A timeout (rc 124) kills pacman mid-transaction inside get-deps,
+	# leaving /var/lib/pacman/db.lck behind — every later retry then fails
+	# instantly on the lock. Clean up exactly like install_sys_pkg
+	# does (lib/distro.sh) before the next attempt can run.
+	local rc=0
+	(cd "$WEZTERM_SRC_DIR" && retry -t 1800 -s "wezterm get-deps" ./get-deps) || rc=$?
+	[ "$rc" -eq 124 ] && cleanup_timed_out_pacman
+	[ "$rc" -ne 0 ] && warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
+	return 0
 }
 
 # wezterm versions are date-based: "wezterm 20240127-113934-3aa51d5a".
