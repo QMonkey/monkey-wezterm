@@ -139,9 +139,11 @@ install_wezterm_build_deps() {
 	refresh_pkg
 	ensure_wezterm_source
 	info "Installing wezterm system dependencies via ./get-deps..."
-	# Idempotent, transient-failure-prone — standard retries. -H reaps the
-	# pacman orphaned by a timeout attempt (it would hold db.lck against every later retry).
-	(cd "$WEZTERM_SRC_DIR" && retry -t 1800 -H cleanup_timed_out_pacman -s "wezterm get-deps" ./get-deps) ||
+	# Idempotent, transient-failure-prone. RETRY_T_HEAVY: the transaction
+	# pulls ~1GB (base-devel + toolchain + GUI libs) and a slow mirror
+	# burns 30min+ per attempt. -H reaps the pacman orphaned by a timeout
+	# attempt (it would hold db.lck against every later retry).
+	(cd "$WEZTERM_SRC_DIR" && retry -t "$RETRY_T_HEAVY" -H cleanup_timed_out_pacman -s "wezterm get-deps" ./get-deps) ||
 		warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
 	return 0
 }
@@ -163,7 +165,7 @@ build_wezterm() {
 	# This is the long pole: a full rust release build runs 10-30 minutes
 	# with NO output from cargo itself — spell out that the wait is normal.
 	info "Compiling wezterm (cargo build --release) — 10-30 minutes, no output below until done..."
-	retry -t 1800 -s "cargo build wezterm" cargo build --release 2>&1 | tee /tmp/wezterm-build.log || {
+	retry -t "$RETRY_T_HEAVY" -s "cargo build wezterm" cargo build --release 2>&1 | tee /tmp/wezterm-build.log || {
 		fail "wezterm build failed. Check /tmp/wezterm-build.log"
 	}
 	popd >/dev/null
