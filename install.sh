@@ -134,16 +134,16 @@ install_wezterm_build_deps() {
 	ensure_rust || die "rustup installation failed — install it manually: https://rust-lang.org/tools/install/"
 	# apt lists on fresh/WSL images are often stale or lack the universe
 	# index that some of wezterm's ./get-deps packages live in — get-deps
-	# does not run apt-get update itself. refresh_pkg (pkg.sh) is distro-
+	# does not run apt-get update itself. distro_refresh (pkg.sh) is distro-
 	# aware, retried, and guarded to one refresh per run.
-	refresh_pkg
+	distro_refresh
 	ensure_wezterm_source
 	info "Installing wezterm system dependencies via ./get-deps..."
 	# Idempotent, transient-failure-prone. RETRY_T_HEAVY: the transaction
 	# pulls ~1GB (base-devel + toolchain + GUI libs) and a slow mirror
 	# burns 30min+ per attempt. -H reaps the pacman orphaned by a timeout
 	# attempt (it would hold db.lck against every later retry).
-	(cd "$WEZTERM_SRC_DIR" && retry -t "$RETRY_T_HEAVY" -H cleanup_timed_out_pacman -s "wezterm get-deps" ./get-deps) ||
+	(cd "$WEZTERM_SRC_DIR" && retry -t "$RETRY_T_HEAVY" -H distro_cleanup_timed_out -s "wezterm get-deps" ./get-deps) ||
 		warn "get-deps failed — install the libraries listed in wezterm docs/install/source.md manually."
 	return 0
 }
