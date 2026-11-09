@@ -9,8 +9,8 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────
 
 . "$(dirname "${BASH_SOURCE[0]:-$0}")/scripts/checkhealth.sh" || {
-	echo "monkey-scripts not found — update this checkout (git pull / re-clone)," >&2
-	echo "or run install.sh, which bootstraps monkey-scripts itself." >&2
+	printf '%s\n' "monkey-scripts not found — update this checkout (git pull / re-clone)," >&2
+	printf '%s\n' "or run install.sh, which bootstraps monkey-scripts itself." >&2
 	exit 1
 }
 
@@ -24,10 +24,11 @@ PROJECT=monkey-wezterm
 MAIN_VERSION="wezterm|ver:20240127|wezterm|none|[0-9]{8}"
 MAIN_VERSION_TITLE="wezterm"
 
-# No required/recommended lists: wezterm itself is built by install.sh
-# (which is also where --install hands over to), plugins and the rust
-# toolchain are informational.
-CONFIG_PHASE=early # config is checked right after Platform, before plugins
+# No required/recommended lists: a required failure can only come from the
+# MAIN_VERSION gate above or the wezterm.lua link below. wezterm itself is built
+# by install.sh (which is also where --install hands over to); plugins and the
+# rust toolchain are informational.
+CONFIG_PHASE=early # checked before the clipboard, optional and advisory sections
 
 # ──────────────────────── usage (wording differs) ────────────────────────
 usage() {
@@ -50,15 +51,15 @@ EOF
 
 # wezterm's Platform section is uname only — no package-manager line.
 print_platform() {
-	echo -e "${BOLD}Platform${NC}"
-	echo -e "  OS: ${CYAN}$(uname -s)${NC}"
-	echo ""
+	printf '%s\n' "${BOLD}Platform${NC}"
+	printf '%s\n' "  OS: ${CYAN}$(uname -s)${NC}"
+	printf '\n'
 }
 
 # ──────────────────────── sections ────────────────────────
-# src|dst|desc|mode|name|hint — the generic check_config_files covers every
-# case the old override handled (broken symlink → fail, plain file → warn,
-# missing → fail with the re-link hint).
+# src|dst|desc|mode|name|hint — the generic check_config_files handles every
+# case (broken symlink → fail, plain file → warn, missing → fail with the
+# re-link hint).
 REPO_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 CONFIG_LINKS=(
 	"$REPO_DIR/.wezterm.lua|$HOME/.config/wezterm/wezterm.lua|wezterm.lua|||wezterm.lua not found (run: mkdir -p ~/.config/wezterm && ln -s $REPO_DIR/.wezterm.lua ~/.config/wezterm/wezterm.lua)"
@@ -81,7 +82,7 @@ checkhealth_extra() {
 		if [ -f "$script_dir/install.sh" ]; then
 			bash "$script_dir/install.sh"
 		else
-			echo -e "${RED}install.sh not found next to checkhealth.sh — run it from the repo, or see https://wezterm.org/installation${NC}"
+			printf '%s\n' "${RED}install.sh not found next to checkhealth.sh — run it from the repo, or see https://wezterm.org/installation${NC}"
 			exit 1
 		fi
 		exit 0
