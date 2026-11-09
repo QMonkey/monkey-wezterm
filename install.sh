@@ -17,7 +17,7 @@ set -euo pipefail
 
 # ──────────────────────── repository identity ────────────────────────
 # Declared before the framework is sourced: the bootstrap below needs both
-# values, and clones into the very directory clone_monkey_project would
+# values, and clones into the very directory clone_project would
 # have used — one clone per run, not two.
 PROJECT=monkey-wezterm
 PROJECT_REPO=https://github.com/QMonkey/monkey-wezterm.git
@@ -36,15 +36,15 @@ if [ ! -f "$_monkey_scripts/install.sh" ]; then
 		# Outdated checkout: update it in place and keep running from it.
 		git -C "$_monkey_dir" pull --ff-only || true
 		if [ ! -f "$_monkey_dir/scripts/install.sh" ]; then
-			echo "monkey-scripts missing from $_monkey_dir (no scripts/ subtree)." >&2
-			echo "  git -C $_monkey_dir pull    # outdated checkout — or the repo never added the subtree" >&2
+			printf '%s\n' "monkey-scripts missing from $_monkey_dir (no scripts/ subtree)." >&2
+			printf '%s\n' "  git -C $_monkey_dir pull    # outdated checkout — or the repo never added the subtree" >&2
 			exit 1
 		fi
 		_monkey_scripts="$_monkey_dir/scripts"
 	else
 		# curl|bash or a .git-less directory: the only path to a
 		# same-revision scripts/ is the INSTALL_DIR checkout.
-		# clone_monkey_project cannot do this job — it lives in the very
+		# clone_project cannot do this job — it lives in the very
 		# scripts/ being fetched. INSTALL_DIR is where the framework's clone
 		# step would have put the checkout too, so that step only confirms it.
 		if [ -d "$INSTALL_DIR/.git" ]; then
@@ -52,15 +52,15 @@ if [ ! -f "$_monkey_scripts/install.sh" ]; then
 			git -C "$INSTALL_DIR" pull --ff-only || true
 		elif [ -d "$INSTALL_DIR" ] && [ -n "$(ls -A "$INSTALL_DIR")" ]; then
 			# git clone would refuse too, so say why in our own words.
-			echo "$INSTALL_DIR is not empty and is not a git clone." >&2
-			echo "  move it aside, delete it, or set INSTALL_DIR elsewhere." >&2
+			printf '%s\n' "$INSTALL_DIR is not empty and is not a git clone." >&2
+			printf '%s\n' "  move it aside, delete it, or set INSTALL_DIR elsewhere." >&2
 			exit 1
 		else
 			# Fresh clone — the ONLY sub-branch where git is hard-required:
 			# the pull sub-branch above degrades gracefully without it, and
 			# a zip/tarball must not fail here just for a missing git.
 			if ! command -v git >/dev/null 2>&1; then
-				echo "git is required to clone $PROJECT — install it first (e.g. sudo apt-get install git), then re-run." >&2
+				printf '%s\n' "git is required to clone $PROJECT — install it first (e.g. sudo apt-get install git), then re-run." >&2
 				exit 1
 			fi
 			# No retry() available yet — the framework loads only after this
@@ -92,10 +92,10 @@ fi
 
 # ──────────────────────── layout & data ────────────────────────
 WEZTERM_SRC_DIR="${WEZTERM_SRC_DIR:-$HOME/Documents/wezterm}"
-CHECKHEALTH_POS=after_links # the original verifies AFTER the config link
+CHECKHEALTH_POS=after_links # its config section verifies the symlink below
 CHECKHEALTH_MODE=verify     # plain run — --install would recurse into here
 INSTALL_INFO=(
-	"wezterm source: ${CYAN}$WEZTERM_SRC_DIR${NC} (kept for future updates)"
+	"wezterm source: ${CYAN}$WEZTERM_SRC_DIR${NC} (cloned here; built when the installed wezterm is below 20240127)"
 )
 SYMLINKS=(
 	"$INSTALL_DIR/.wezterm.lua|$HOME/.config/wezterm/wezterm.lua"
@@ -105,11 +105,11 @@ SUMMARY_LINES=(
 	"  Plugins:  ${CYAN}~/.local/share/wezterm/plugins/${NC} (tabline.wez, auto-cloned on first start)"
 	""
 	"  Run ${CYAN}wezterm${NC} to start."
-	"  Update wezterm: ${CYAN}cd $WEZTERM_SRC_DIR && git pull --ff-only && git submodule update --init --recursive && cargo build --release && sudo cp target/release/{wezterm,wezterm-gui} /usr/local/bin/${NC}"
+	"  Update wezterm: ${CYAN}cd $WEZTERM_SRC_DIR && git pull --ff-only && git submodule update --init --recursive && cargo build --release && sudo cp target/release/{wezterm,wezterm-gui,wezterm-mux-server} /usr/local/bin/${NC}"
 	"  Update monkey-wezterm: ${CYAN}cd $INSTALL_DIR && git pull${NC}"
 )
 
-# ──────────────────────── build steps (verbatim) ────────────────────────
+# ──────────────────────── build steps ────────────────────────
 
 ensure_wezterm_source() {
 	# --submodules: shallow two-step fetch (clone --depth=1, then submodule
@@ -130,7 +130,7 @@ install_wezterm_build_deps() {
 	# (lib/pkg.sh) and ensure_rust (lib/toolchain.sh) live in the shared framework.
 	ensure_git
 	# ensure_rust is non-fatal (warn + rc 1) for the checkhealth strategies;
-	# here a missing toolchain must abort the install, as ensure_rustup did.
+	# here a missing toolchain must abort the install.
 	ensure_rust || die "rustup installation failed — install it manually: https://rust-lang.org/tools/install/"
 	# apt lists on fresh/WSL images are often stale or lack the universe
 	# index that some of wezterm's ./get-deps packages live in — get-deps
@@ -189,16 +189,16 @@ build_wezterm() {
 
 # ──────────────────────── hooks ────────────────────────
 
-# No blank line before the first step: the original runs it right after
-# setup_sudo; the trailing blank is its own.
+# No blank line before this step: install_main runs setup_sudo directly into it;
+# the trailing blank is the hook's own.
 install_step_prepare() {
 	install_wezterm_build_deps
-	echo ""
+	printf '\n'
 }
 
 install_step_tool() {
 	build_wezterm
-	echo ""
+	printf '\n'
 }
 
 install_main "$@"
