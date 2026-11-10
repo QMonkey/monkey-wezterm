@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────
 # monkey-wezterm one-shot installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/QMonkey/monkey-wezterm/master/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/QMonkey/monkey-wezterm/master/install.sh | bash 2>&1 | tee monkey-wezterm-install.log
 #
 # Builds wezterm from source (rustup + distro deps + cargo build), clones
 # this repo, links the config and runs checkhealth.sh for verification.
