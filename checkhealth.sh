@@ -30,32 +30,6 @@ MAIN_VERSION_TITLE="wezterm"
 # rust toolchain are informational.
 CONFIG_PHASE=early # checked before the clipboard, optional and advisory sections
 
-# ──────────────────────── usage (wording differs) ────────────────────────
-usage() {
-	cat <<EOF
-Usage: $0 [OPTIONS]
-
-Check and optionally install dependencies for ${PROJECT}.
-
-OPTIONS
-  -i, --install    Install missing dependencies (delegates to install.sh)
-  --skip-check-config
-                   Skip config-file checks (install.sh passes this: the
-                   config symlinks are linked before this script runs)
-  -h, --help       Show this help
-
-Exit code: 1 if any required dependency is missing, 0 otherwise.
-EOF
-	exit 0
-}
-
-# wezterm's Platform section is uname only — no package-manager line.
-print_platform() {
-	printf '%s\n' "${BOLD}Platform${NC}"
-	printf '%s\n' "  OS: ${CYAN}$(uname -s)${NC}"
-	printf '\n'
-}
-
 # ──────────────────────── sections ────────────────────────
 # src|dst|desc|mode|name|hint — the generic check_config_files handles every
 # case (broken symlink → fail, plain file → warn, missing → fail with the
